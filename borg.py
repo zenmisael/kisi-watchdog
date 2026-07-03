@@ -1,11 +1,13 @@
 import eventlet
 eventlet.monkey_patch()
 
-import asyncio, threading, hashlib, os, secrets, sqlite3, requests, socket, random, urllib3
+import asyncio, threading, hashlib, os, secrets, sqlite3, requests, socket, random, time, urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from datetime import datetime
+from functools import wraps
 from flask import Flask, render_template, jsonify, request, session, redirect
 from flask_socketio import SocketIO
+from werkzeug.security import generate_password_hash, check_password_hash
 
 DB = "data/monitor.db"
 FAIL_THRESHOLD = 3
@@ -20,7 +22,55 @@ ZABBIX_PASS = os.getenv("ZABBIX_PASS")
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY") or secrets.token_hex(32)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    # Set SESSION_COOKIE_SECURE=1 when served over HTTPS (recommended in prod).
+    SESSION_COOKIE_SECURE=os.getenv("SESSION_COOKIE_SECURE", "0") == "1",
+)
 socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*")
+
+# --- AUTH HELPERS ---
+def require_login(f):
+    @wraps(f)
+    def wrapper(*a, **k):
+        if "user" not in session:
+            return jsonify({"error": "authentication required"}), 401
+        return f(*a, **k)
+    return wrapper
+
+def require_admin(f):
+    @wraps(f)
+    def wrapper(*a, **k):
+        if "user" not in session:
+            return jsonify({"error": "authentication required"}), 401
+        if session.get("role") != "admin":
+            return jsonify({"error": "admin privileges required"}), 403
+        return f(*a, **k)
+    return wrapper
+
+# --- PASSWORD HASHING (werkzeug, with legacy sha256 fallback) ---
+def hash_password(p):
+    return generate_password_hash(p)
+
+def _is_legacy_sha256(stored):
+    return len(stored) == 64 and all(ch in "0123456789abcdef" for ch in stored.lower())
+
+def verify_password(stored, provided):
+    if _is_legacy_sha256(stored):
+        return hashlib.sha256(provided.encode()).hexdigest() == stored
+    try:
+        return check_password_hash(stored, provided)
+    except Exception:
+        return False
+
+# --- CSRF PROTECTION ---
+# The dashboard changes state via same-origin fetch() POSTs that carry no CSRF
+# token in the page. Rather than alter the frontend, we rely on the
+# SESSION_COOKIE_SAMESITE="Lax" cookie set above: browsers will not attach the
+# session cookie to cross-site POST requests, so a forged request arrives
+# without a valid session and is rejected by @require_login / @require_admin.
+# (For stricter defense later, add an X-CSRFToken header to the fetch calls.)
 
 loop = asyncio.new_event_loop()
 tasks = {}
@@ -58,21 +108,35 @@ def init_db():
 
     def ensure(u, p, r):
         if not c.execute("SELECT 1 FROM users WHERE username=?", (u,)).fetchone():
-            c.execute("INSERT INTO users VALUES(?,?,?)", (u, hashlib.sha256(p.encode()).hexdigest(), r))
-    ensure("admin", "admin123", "admin"); ensure("viewer", "viewer123", "viewer")
+            c.execute("INSERT INTO users VALUES(?,?,?)", (u, hash_password(p), r))
+    ensure("admin", os.getenv("ADMIN_PASSWORD", "admin123"), "admin")
+    ensure("viewer", os.getenv("VIEWER_PASSWORD", "viewer123"), "viewer")
     conn.commit(); conn.close()
 
 init_db()
 
 # --- ZABBIX HELPERS ---
-def get_zabbix_token():
+# Cache the auth token instead of logging in on every check (which otherwise
+# opens a new Zabbix session every poll cycle).
+_zbx_cache = {"token": None, "ts": 0.0}
+ZBX_TOKEN_TTL = 300  # seconds; re-login after this
+
+def get_zabbix_token(force=False):
+    now = time.time()
+    if not force and _zbx_cache["token"] and (now - _zbx_cache["ts"]) < ZBX_TOKEN_TTL:
+        return _zbx_cache["token"]
     try:
         auth_p = {"jsonrpc": "2.0", "method": "user.login", "params": {"user": ZABBIX_USER, "password": ZABBIX_PASS}, "id": 1}
         r = requests.post(ZABBIX_URL, json=auth_p, timeout=5, verify=False).json()
-        return r.get('result')
+        tok = r.get('result')
+        if tok:
+            _zbx_cache["token"] = tok
+            _zbx_cache["ts"] = now
+        return tok
     except: return None
 
 @app.route("/zabbix_hosts")
+@require_login
 def list_zabbix_hosts():
     if session.get("role") != "admin": return jsonify([])
     token = get_zabbix_token()
@@ -84,6 +148,7 @@ def list_zabbix_hosts():
     except: return jsonify([])
 
 @app.route("/zabbix_items/<hostid>")
+@require_login
 def list_zabbix_items(hostid):
     if session.get("role") != "admin": return jsonify([])
     token = get_zabbix_token()
@@ -587,23 +652,34 @@ def index():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        u, p = request.form["username"], hashlib.sha256(request.form["password"].encode()).hexdigest()
-        r = get_db().execute("SELECT role FROM users WHERE username=? AND password=?", (u, p)).fetchone()
-        if r: session["user"] = u; session["role"] = r["role"]; return redirect("/")
+        u = request.form["username"]
+        pw = request.form["password"]
+        conn = get_db()
+        row = conn.execute("SELECT password, role FROM users WHERE username=?", (u,)).fetchone()
+        if row and verify_password(row["password"], pw):
+            # Transparently upgrade legacy sha256 hashes on successful login.
+            if _is_legacy_sha256(row["password"]):
+                conn.execute("UPDATE users SET password=? WHERE username=?", (hash_password(pw), u))
+                conn.commit()
+            conn.close()
+            session["user"] = u; session["role"] = row["role"]; return redirect("/")
+        conn.close()
     return render_template("login.html")
 
 @app.route("/logout")
 def logout(): session.clear(); return redirect("/login")
 
 @app.route("/status")
+@require_login
 def status(): return jsonify([dict(r) for r in get_db().execute("SELECT * FROM targets")])
 
 @app.route("/incidents")
+@require_login
 def incidents(): return jsonify([dict(r) for r in get_db().execute("SELECT * FROM incidents ORDER BY id DESC LIMIT 15")])
 
 @app.route("/add", methods=["POST"])
+@require_admin
 def add():
-    if session.get("role") != "admin": return jsonify({"ok":0}), 403
     p = request.form; ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = get_db(); c = conn.cursor()
     try:
@@ -619,8 +695,8 @@ def add():
     finally: conn.close()
 
 @app.route("/remove/<int:id>", methods=["POST"])
+@require_admin
 def remove(id):
-    if session.get("role") != "admin": return "Err", 403
     conn = get_db(); t = conn.execute("SELECT name, description FROM targets WHERE id=?", (id,)).fetchone()
     conn.execute("DELETE FROM targets WHERE id=?", (id,)); conn.commit(); conn.close()
     if id in tasks:
@@ -633,10 +709,8 @@ def remove(id):
     socketio.emit('status_update'); return jsonify({"ok": 1})
 
 @app.route("/toggle_maintenance/<int:id>", methods=["POST"])
+@require_admin
 def maint(id):
-
-    if session.get("role") != "admin":
-        return "Err", 403
 
     conn = get_db()
 
