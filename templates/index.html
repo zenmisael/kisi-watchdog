@@ -84,11 +84,16 @@
         .host-chip .hc-name { font-weight:700; }
         .host-chip .hc-actions { display:flex; gap:3px; flex-shrink:0; }
 
-        /* TV mode: sections fill the screen and scroll instead of clipping */
-        body.tv-mode .group-wrap { flex-grow:1; overflow-y:auto; }
-        body.tv-mode .host-chips { grid-template-columns:repeat(auto-fill, minmax(14vw, 1fr)); gap:1vh; }
-        body.tv-mode .host-chip .hc-name { font-size:1.8vh; }
-        body.tv-mode .host-chip .small { font-size:1.4vh; }
+        /* TV mode: content is scaled by JS (fitTv) to fit the screen — no scroll */
+        body.tv-mode .group-wrap { flex-grow:1; overflow:visible; transform-origin: top center; }
+        body.tv-mode #incidentBanner { flex-shrink:0; max-height:14vh; overflow:hidden; font-size:1.7vh; padding:1vh; }
+        body.tv-mode .group-section { padding:6px 10px; margin-bottom:6px; }
+        body.tv-mode .group-head { margin-bottom:4px; }
+        body.tv-mode .group-head .gname { font-size:13px; }
+        body.tv-mode .host-chips { grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:5px; }
+        body.tv-mode .host-chip { padding:4px 7px; }
+        body.tv-mode .host-chip .hc-name { font-size:12px; }
+        body.tv-mode .host-chip .small { font-size:10px; }
     </style>
 </head>
 <body>
@@ -360,6 +365,7 @@ if(!groupMode) {
     offlineCount.innerText = counts.f;
     maintCount.innerText = counts.m;
 
+    scheduleFit();
     return;
 }
 
@@ -492,6 +498,7 @@ deviceGrid.innerHTML = html;
                 incidentBanner.innerText = "🚨 EMERGENCY: ALERTS ACTIVE 🚨\n" + offItems.join("\n");
                 if(!alarmMuted) alarmSound.play().catch(()=>{});
             } else { incidentBanner.style.display = "none"; alarmSound.pause(); }
+            scheduleFit();
         });
         if(!tvMode) {
             fetch("/incidents").then(r => r.json()).then(data => {
@@ -500,6 +507,28 @@ deviceGrid.innerHTML = html;
                 incidentTable.innerHTML = rows;
             });
         }
+    }
+
+    // --- TV MODE: scale the board so every host fits on screen (no scrolling) ---
+    function scheduleFit() { requestAnimationFrame(() => requestAnimationFrame(fitTv)); }
+
+    function fitTv() {
+        const el = deviceGrid;
+        el.style.transform = 'none';
+        el.style.transformOrigin = 'top center';
+        if (!tvMode || !el.lastElementChild) return;
+        const limit = window.innerHeight - 8;               // viewport bottom, small pad
+        const bottom = () => el.lastElementChild.getBoundingClientRect().bottom;
+        if (bottom() <= limit) return;                      // fits at full size
+        // Binary-search the largest scale whose *measured* last section still fits.
+        // Robust to sub-pixel/font/layout variance since it checks real geometry.
+        let lo = 0.2, hi = 1;
+        for (let i = 0; i < 14; i++) {
+            const mid = (lo + hi) / 2;
+            el.style.transform = 'scale(' + mid + ')';
+            if (bottom() <= limit) lo = mid; else hi = mid;
+        }
+        el.style.transform = 'scale(' + lo + ')';
     }
 
     function addTarget() {
@@ -541,6 +570,9 @@ deviceGrid.innerHTML = html;
     function toggleMaint(id) { fetch("/toggle_maintenance/"+id, {method:"POST"}).then(()=>refresh()); }
     function delT(id) { if(confirm("Delete Host?")) fetch("/remove/"+id, {method:"POST"}).then(()=>refresh()); }
     function clearIncidents() { if(confirm("Clear Logs?")) fetch("/clear_incidents", {method:"POST"}).then(()=>refresh()); }
+
+    window.addEventListener('resize', () => { if (tvMode) fitTv(); });
+    document.addEventListener('fullscreenchange', () => { if (tvMode) scheduleFit(); });
 
     refresh();
 </script>
