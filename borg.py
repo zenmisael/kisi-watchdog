@@ -9,6 +9,22 @@ from flask import Flask, render_template, jsonify, request, session, redirect
 from flask_socketio import SocketIO
 from werkzeug.security import generate_password_hash, check_password_hash
 
+# Load a local .env (if present) so `python borg.py` picks up secrets the same
+# way docker-compose's env_file does. Real env vars take precedence over .env.
+def _load_dotenv(path=".env"):
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+    except FileNotFoundError:
+        pass
+
+_load_dotenv()
+
 DB = "data/monitor.db"
 FAIL_THRESHOLD = 3
 MIN_OUTAGE_DURATION = 7
