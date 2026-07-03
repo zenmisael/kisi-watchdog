@@ -85,9 +85,14 @@
         .host-chip .hc-actions { display:flex; gap:3px; flex-shrink:0; }
 
         /* TV mode: content is scaled by JS (fitTv) to fit the screen — no scroll */
-        body.tv-mode .group-wrap { flex-grow:1; overflow:visible; transform-origin: top center; }
-        body.tv-mode #incidentBanner { flex-shrink:0; max-height:14vh; overflow:hidden; font-size:1.7vh; padding:1vh; }
-        body.tv-mode .group-section { padding:6px 10px; margin-bottom:6px; }
+        /* Pack group sections into multiple columns so the board is short and the
+           fit-scale stays close to 1:1 (readable). Sections never split across a
+           column. Tall groups (many hosts) span all columns for a wide chip grid. */
+        body.tv-mode .group-wrap { flex-grow:1; overflow:visible; transform-origin: top center;
+            column-width:30vw; column-gap:8px; }
+        body.tv-mode .group-section { break-inside:avoid; padding:6px 10px; margin:0 0 8px; }
+        body.tv-mode .group-section.wide { column-span:all; }
+        body.tv-mode #incidentBanner { flex-shrink:0; max-height:11vh; overflow:hidden; font-size:1.5vh; padding:0.8vh; }
         body.tv-mode .group-head { margin-bottom:4px; }
         body.tv-mode .group-head .gname { font-size:13px; }
         body.tv-mode .host-chips { grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:5px; }
@@ -477,7 +482,7 @@ groupNames.forEach(groupName => {
     let sectionClass = offlineInGroup > 0 ? "offline" : (maintInGroup > 0 ? "maintenance" : "");
 
     html += `
-        <div class="group-section ${sectionClass}">
+        <div class="group-section ${sectionClass} ${hosts.length > 8 ? 'wide' : ''}">
             <div class="group-head">
                 <span class="gname">${groupName} <span class="badge bg-secondary">${hosts.length} Hosts</span></span>
                 <span class="small opacity-75">✅ ${onlineInGroup} &nbsp;|&nbsp; ❌ ${offlineInGroup} &nbsp;|&nbsp; 🟡 ${maintInGroup}</span>
@@ -516,19 +521,17 @@ deviceGrid.innerHTML = html;
         const el = deviceGrid;
         el.style.transform = 'none';
         el.style.transformOrigin = 'top center';
-        if (!tvMode || !el.lastElementChild) return;
-        const limit = window.innerHeight - 8;               // viewport bottom, small pad
-        const bottom = () => el.lastElementChild.getBoundingClientRect().bottom;
-        if (bottom() <= limit) return;                      // fits at full size
-        // Binary-search the largest scale whose *measured* last section still fits.
-        // Robust to sub-pixel/font/layout variance since it checks real geometry.
-        let lo = 0.2, hi = 1;
-        for (let i = 0; i < 14; i++) {
-            const mid = (lo + hi) / 2;
-            el.style.transform = 'scale(' + mid + ')';
-            if (bottom() <= limit) lo = mid; else hi = mid;
-        }
-        el.style.transform = 'scale(' + lo + ')';
+        if (!tvMode) return;
+        // Only grouped mode is scaled; single mode uses its own stretch grid.
+        if (!el.classList.contains('group-wrap')) return;
+        // Scale the board down just enough that its full natural height fits the
+        // space from its top edge to the viewport bottom. overflow:visible means
+        // scrollHeight is the true content height (no pre-transform clipping).
+        const top = el.getBoundingClientRect().top;
+        const availH = window.innerHeight - top - 8;
+        const natH = el.scrollHeight;
+        if (availH <= 0 || natH <= availH) return;   // already fits at full size
+        el.style.transform = 'scale(' + (availH / natH) + ')';
     }
 
     function addTarget() {
