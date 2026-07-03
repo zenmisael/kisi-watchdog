@@ -68,6 +68,27 @@
         #incidentBanner { display: none; background: #ff0000; color: white; padding: 1.5vh; text-align: center; font-weight: 900; border-radius: 10px; margin-bottom: 1.5vh; animation: blink 1s infinite; white-space: pre-wrap; font-size: 2.5vh; }
         @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
         .btn-xs { padding: 1px 5px; font-size: 10px; }
+
+        /* --- GROUPED MODE: full-width sections + host-chip grid --- */
+        .group-wrap { display: block; }
+        .group-section { background:#0b1220; border:1px solid rgba(255,255,255,0.06); border-left:6px solid #334155; border-radius:12px; padding:12px 14px; margin-bottom:12px; }
+        .group-section.offline { border-left-color:#ff0000; }
+        .group-section.maintenance { border-left-color:#fbbf24; }
+        .group-head { display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+        .group-head .gname { font-weight:800; font-size:15px; }
+        .host-chips { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:8px; }
+        .host-chip { background:#0f172a; border-radius:8px; border-left:4px solid #334155; padding:8px 10px; display:flex; justify-content:space-between; align-items:flex-start; gap:8px; min-width:0; }
+        .host-chip.offline { border-left-color:#ff0000; background:#1c1010; }
+        .host-chip.maintenance { border-left-color:#fbbf24; }
+        .host-chip .hc-main { min-width:0; flex:1; }
+        .host-chip .hc-name { font-weight:700; }
+        .host-chip .hc-actions { display:flex; gap:3px; flex-shrink:0; }
+
+        /* TV mode: sections fill the screen and scroll instead of clipping */
+        body.tv-mode .group-wrap { flex-grow:1; overflow-y:auto; }
+        body.tv-mode .host-chips { grid-template-columns:repeat(auto-fill, minmax(14vw, 1fr)); gap:1vh; }
+        body.tv-mode .host-chip .hc-name { font-size:1.8vh; }
+        body.tv-mode .host-chip .small { font-size:1.4vh; }
     </style>
 </head>
 <body>
@@ -331,6 +352,7 @@ if(!groupMode) {
         `;
     });
 
+    deviceGrid.className = "device-grid";
     deviceGrid.innerHTML = html;
 
     totalCount.innerText = counts.t;
@@ -387,174 +409,78 @@ data.forEach(d => {
     groups[groupKey].push(d);
 });
 
-Object.keys(groups).forEach(groupName => {
+// rank: offline first, then maintenance, then online (for sorting)
+const hostRank = h => h.maintenance ? 2 : (h.status !== "Online" ? 0 : 1);
 
-    const hosts = groups[groupName];
+// order groups so those with outages float to the top
+const groupNames = Object.keys(groups).sort((a, b) => {
+    const off = g => groups[g].filter(h => !h.maintenance && h.status !== "Online").length;
+    const diff = (off(b) > 0) - (off(a) > 0);
+    return diff !== 0 ? diff : a.localeCompare(b);
+});
 
-    let groupOffline = false;
-    let groupMaint = false;
+groupNames.forEach(groupName => {
 
-    let hostRows = "";
-    let offlineCountInGroup = 0;
+    const hosts = groups[groupName].slice().sort((a, b) => hostRank(a) - hostRank(b));
+
+    let chips = "";
+    let offlineInGroup = 0, maintInGroup = 0, onlineInGroup = 0;
 
     hosts.forEach(d => {
 
-	counts.t++;
+        counts.t++;
         let cls = "online";
         let stText = d.status;
 
         if(d.maintenance) {
-
-            counts.m++;
-
+            counts.m++; maintInGroup++;
             cls = "maintenance";
-
             stText = "Maintenance";
-
-            groupMaint = true;
-
         } else if(d.status !== "Online") {
-
-            counts.f++;
-
+            counts.f++; offlineInGroup++;
             cls = "offline";
-
             stText = (
-                d.monitor_type.toLowerCase() === 'zabbix'
+                (d.monitor_type || "").toLowerCase() === 'zabbix'
                 && (d.zabbix_item_key || "").match(/usage|util|pused|cpu|load/i)
-            )
-            ? "HIGH USAGE"
-            : "OFFLINE";
-
-	    offlineCountInGroup++;
-
-            offItems.push(
-                d.description
-                ? `${d.name} (${d.description})`
-                : `${d.name}`
-            );
-
+            ) ? "HIGH USAGE" : "OFFLINE";
+            offItems.push(d.description ? `${d.name} (${d.description})` : `${d.name}`);
         } else {
-
-            counts.o++;
+            counts.o++; onlineInGroup++;
         }
 
-        hostRows += `
-            <div class="d-flex justify-content-between align-items-center border-top border-secondary pt-1 mt-1">
+        const stColor = cls == 'offline' ? '#ff4444' : (cls == 'maintenance' ? '#fbbf24' : '#4ade80');
 
-                <div style="max-width:65%; overflow:hidden;">
+        const actions = (isAdmin && !tvMode) ? `
+            <div class="hc-actions">
+                <button onclick='editT(${JSON.stringify(d)})' class="btn btn-xs btn-warning">Edit</button>
+                <button onclick="toggleMaint(${d.id})" class="btn btn-xs btn-secondary">M</button>
+                <button onclick="delT(${d.id})" class="btn btn-xs btn-danger">X</button>
+            </div>` : '';
 
-                    <div class="fw-bold text-truncate">
-                        ${d.name}
-                    </div>
-
-                    <div class="small opacity-75 ${tvMode ? '' : 'text-truncate'}">
-                        ${d.description || ''}
-                    </div>
-
+        chips += `
+            <div class="host-chip ${cls}">
+                <div class="hc-main">
+                    <div class="hc-name text-truncate">${d.name}</div>
+                    <div class="small opacity-75 ${tvMode ? '' : 'text-truncate'}">${d.description || ''}</div>
+                    <div class="fw-bold" style="color:${stColor}; font-size:12px;">${stText}</div>
                 </div>
-
-                <div class="text-end">
-
-                    <div class="fw-bold"
-                        style="color:${
-                            cls=='offline'
-                            ? '#ff4444'
-                            : (
-                                cls=='maintenance'
-                                ? '#fbbf24'
-                                : '#4ade80'
-                            )
-                        }">
-
-                        ${stText}
-                    </div>
-
-                    ${
-                        isAdmin && !tvMode
-                        ? `
-                        <div class="mt-1">
-                            <button onclick='editT(${JSON.stringify(d)})'
-                                class="btn btn-xs btn-warning">
-                                Edit
-                            </button>
-
-                            <button onclick="toggleMaint(${d.id})"
-                                class="btn btn-xs btn-secondary">
-                                M
-                            </button>
-
-                            <button onclick="delT(${d.id})"
-                                class="btn btn-xs btn-danger">
-                                X
-                            </button>
-                        </div>
-                        `
-                        : ''
-                    }
-
-                </div>
-
-            </div>
-        `;
+                ${actions}
+            </div>`;
     });
 
-    let cardClass = "";
-
-
-    if(
-    	offlineCountInGroup === hosts.length
-    	&& hosts.length > 0
-    ) {
-
-    cardClass = "offline";
-
-    } else if(groupMaint) {
-
-        cardClass = "maintenance";
-    }
+    let sectionClass = offlineInGroup > 0 ? "offline" : (maintInGroup > 0 ? "maintenance" : "");
 
     html += `
-        <div class="device-card ${cardClass}">
-
-            <div class="d-flex justify-content-between align-items-center">
-
-                <b>
-                    ${groupName}
-                </b>
-
-                <span class="badge bg-secondary">
-                    ${hosts.length} Hosts
-                </span>
-
+        <div class="group-section ${sectionClass}">
+            <div class="group-head">
+                <span class="gname">${groupName} <span class="badge bg-secondary">${hosts.length} Hosts</span></span>
+                <span class="small opacity-75">✅ ${onlineInGroup} &nbsp;|&nbsp; ❌ ${offlineInGroup} &nbsp;|&nbsp; 🟡 ${maintInGroup}</span>
             </div>
-
-
-	   <div class="small opacity-75 mb-2 d-flex justify-content-between">
-
-    		<span>
-        	Grouped Monitoring
-    		</span>
-
-    		<span>
-        	✅ ${hosts.filter(h => h.status === 'Online' && !h.maintenance).length}
-        	|
-        	❌ ${offlineCountInGroup}
-        	|
-        	🟡 ${hosts.filter(h => h.maintenance).length}
-    		</span>
-
-	</div>
-
-
-		<div style="max-height:${tvMode ? '35vh' : '300px'}; overflow-y:auto;">
-    		${hostRows}
-		</div>
-
-        </div>
-    `;
+            <div class="host-chips">${chips}</div>
+        </div>`;
 });
 
+deviceGrid.className = "group-wrap";
 deviceGrid.innerHTML = html;
  
 
