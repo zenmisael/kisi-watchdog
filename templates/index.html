@@ -8,7 +8,7 @@
     <style>
 
 	body {
-    	    background: #020617;
+    	    background: #010206;
             color: #e2e8f0;
             font-family: sans-serif;
             transition: background 0.3s;
@@ -39,7 +39,7 @@
         /* FIX: Full Screen Grid Calculation for TV */
         body.tv-mode .device-grid { flex-grow: 1; grid-template-columns: repeat(auto-fill, minmax(18vw, 1fr)); grid-auto-rows: 1fr; gap: 1.5vh; overflow-y: auto; align-content: stretch; }
 
-        .device-card { background: #0f172a; padding: 15px; border-radius: 12px; border-left: 6px solid #334155; position: relative; display: flex; flex-direction: column; justify-content: space-between; min-height: 0; }
+        .device-card { background: #0a0e17; padding: 15px; border-radius: 12px; border-left: 6px solid #1e293b; position: relative; display: flex; flex-direction: column; justify-content: space-between; min-height: 0; }
         
         body.tv-mode .device-card { padding: 2vh; }
         body.tv-mode .device-card b { font-size: 2.2vh; }
@@ -59,7 +59,7 @@
         .device-card.offline { border-left: 10px solid #ff0000; animation: pulse 0.8s infinite; }
         .device-card.maintenance { border-left: 6px solid #fbbf24; }
         
-        @keyframes pulse { 0% { transform: scale(1); background: #0f172a; } 50% { transform: scale(1.01); background: #450a0a; } 100% { transform: scale(1); background: #1c2536; } }
+        @keyframes pulse { 0% { transform: scale(1); background: #0a0e17; } 50% { transform: scale(1.01); background: #3a0808; } 100% { transform: scale(1); background: #12141c; } }
         
         .badge-icmp { background-color: #0d6efd !important; color: white; }
         .badge-tcp { background-color: #f472b6 !important; color: white; } 
@@ -69,16 +69,22 @@
         @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
         .btn-xs { padding: 1px 5px; font-size: 10px; }
 
+        /* Darker theme: pull Bootstrap dark surfaces down to match the cards */
+        .bg-dark { background-color: #0a0e17 !important; }
+        .card.bg-dark { background-color: #07090f !important; }
+        .table-dark { --bs-table-bg: #07090f; --bs-table-border-color: #1e293b; }
+        .form-control.bg-dark, .form-select.bg-dark { background-color: #0a0e17 !important; border-color: #1e293b; }
+
         /* --- GROUPED MODE: full-width sections + host-chip grid --- */
         .group-wrap { display: block; }
-        .group-section { background:#0b1220; border:1px solid rgba(255,255,255,0.06); border-left:6px solid #334155; border-radius:12px; padding:12px 14px; margin-bottom:12px; }
+        .group-section { background:#05070e; border:1px solid rgba(255,255,255,0.05); border-left:6px solid #1e293b; border-radius:12px; padding:12px 14px; margin-bottom:12px; }
         .group-section.offline { border-left-color:#ff0000; }
         .group-section.maintenance { border-left-color:#fbbf24; }
         .group-head { display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
         .group-head .gname { font-weight:800; font-size:15px; }
         .host-chips { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:8px; }
-        .host-chip { background:#0f172a; border-radius:8px; border-left:4px solid #334155; padding:8px 10px; display:flex; justify-content:space-between; align-items:flex-start; gap:8px; min-width:0; }
-        .host-chip.offline { border-left-color:#ff0000; background:#1c1010; }
+        .host-chip { background:#0a0e17; border-radius:8px; border-left:4px solid #1e293b; padding:8px 10px; display:flex; justify-content:space-between; align-items:flex-start; gap:8px; min-width:0; }
+        .host-chip.offline { border-left-color:#ff0000; background:#160b0b; }
         .host-chip.maintenance { border-left-color:#fbbf24; }
         .host-chip .hc-main { min-width:0; flex:1; }
         .host-chip .hc-name { font-weight:700; }
@@ -115,10 +121,10 @@
     </div>
 
     <div class="row g-2 mb-3" id="summaryRow">
-        <div class="col"><div class="summary-box p-2 text-center bg-dark"><div class="summary-label">TOTAL</div><h2 id="totalCount" class="stat-val m-0">0</h2></div></div>
-        <div class="col"><div class="summary-box p-2 text-center" style="background:#022c22;"><div class="summary-label">GOOD/ONLINE</div><h2 id="onlineCount" class="stat-val m-0" style="color: #4ade80 !important;">0</h2></div></div>
-        <div class="col"><div class="summary-box p-2 text-center" style="background:#3f0a0a;"><div class="summary-label">CRITICAL/OFFLINE</div><h2 id="offlineCount" class="stat-val m-0" style="color: #f87171 !important;">0</h2></div></div>
-        <div class="col"><div class="summary-box p-2 text-center" style="background:#422006;"><div class="summary-label">MAINTENANCE</div><h2 id="maintCount" class="stat-val m-0" style="color: #fbbf24 !important;">0</h2></div></div>
+        <div class="col"><div class="summary-box p-2 text-center" style="background:#0a0e17;"><div class="summary-label">TOTAL</div><h2 id="totalCount" class="stat-val m-0">0</h2></div></div>
+        <div class="col"><div class="summary-box p-2 text-center" style="background:#04170f;"><div class="summary-label">GOOD/ONLINE</div><h2 id="onlineCount" class="stat-val m-0" style="color: #4ade80 !important;">0</h2></div></div>
+        <div class="col"><div class="summary-box p-2 text-center" style="background:#210606;"><div class="summary-label">CRITICAL/OFFLINE</div><h2 id="offlineCount" class="stat-val m-0" style="color: #f87171 !important;">0</h2></div></div>
+        <div class="col"><div class="summary-box p-2 text-center" style="background:#231103;"><div class="summary-label">MAINTENANCE</div><h2 id="maintCount" class="stat-val m-0" style="color: #fbbf24 !important;">0</h2></div></div>
     </div>
 
     <div id="incidentBanner"></div>
