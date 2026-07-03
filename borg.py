@@ -20,6 +20,12 @@ ZABBIX_URL = os.getenv("ZABBIX_URL", "https://zabbix.kisi.co.id/api_jsonrpc.php"
 ZABBIX_USER = os.getenv("ZABBIX_USER", "admin")
 ZABBIX_PASS = os.getenv("ZABBIX_PASS")
 
+# MARK — Zabbix "all offline" gotcha: without ZABBIX_PASS there is no auth
+# token, so Zabbix checks return "unknown" and targets can never come online.
+# (Zabbix 5.0 login uses the "user" param, already sent below.)
+if not ZABBIX_PASS:
+    print("WARNING: ZABBIX_PASS is not set — Zabbix targets cannot be checked. Set it in .env")
+
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY") or secrets.token_hex(32)
 app.config.update(
@@ -166,7 +172,12 @@ async def check_zabbix_status(hostid, item_key):
 
         token = get_zabbix_token()
 
-        if not token or not hostid:
+        # No token = can't reach/authenticate Zabbix. Return None ("unknown")
+        # so monitor_target keeps the last status instead of flipping every
+        # Zabbix target to Offline (and spamming incidents/Telegram).
+        if not token:
+            return None
+        if not hostid:
             return False
 
         try:
@@ -331,7 +342,8 @@ async def check_zabbix_status(hostid, item_key):
                 e
             )
 
-            return False
+            # Network/API error — treat as "unknown", not a real outage.
+            return None
 
     return await loop.run_in_executor(
         None,
@@ -483,7 +495,17 @@ async def monitor_target(tid):
                     "%Y-%m-%d %H:%M:%S"
                 )
 
-                if ok:
+                if ok is None:
+
+                    # "Unknown" (e.g. Zabbix unreachable/unauthenticated):
+                    # record the check time but keep the last status. Do NOT
+                    # count a failure, flip to Offline, or fire an alert.
+                    c.execute(
+                        "UPDATE targets SET last_check=? WHERE id=?",
+                        (ts, tid)
+                    )
+
+                elif ok:
 
                     if t["status"] == "Offline":
 
