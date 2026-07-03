@@ -1,0 +1,27 @@
+# Secrets — never commit
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Runtime data / database
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Local backups / scratch copies (graveyard)
+*.bak
+*.async
+*.zabbix
+*.lattest
+*.pyed
+borgzabbix.py
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store

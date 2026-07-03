@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>KISI NOC Dashboard</title>
+    <meta charset="UTF-8">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+
+	body {
+    	    background: #020617;
+            color: #e2e8f0;
+            font-family: sans-serif;
+            transition: background 0.3s;
+            margin: 0;
+            padding: 0;
+	}
+        
+        /* --- GOLDEN RULES: 55" TV & 13" MACBOOK --- */
+        body.tv-mode { height: 100vh; width: 100vw; overflow: hidden; display: flex; flex-direction: column; }
+        body.tv-mode .container-fluid { display: flex; flex-direction: column; height: 100vh; max-width: 100% !important; padding: 1.5vh !important; margin: 0 !important; }
+        body.tv-mode .header-main, body.tv-mode #addForm, body.tv-mode .history-card { display: none !important; }
+        
+        body.tv-mode #summaryRow { margin-bottom: 1.5vh !important; flex-shrink: 0; }
+        body.tv-mode .stat-val { font-size: 7vh !important; line-height: 1; }
+        body.tv-mode .summary-label { font-size: 1.6vh !important; }
+
+	.summary-box {
+    	    border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.05);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+	}
+
+        .summary-label { font-size: 11px; font-weight: 800; letter-spacing: 1px; color: #94a3b8; }
+        .stat-val { font-size: 48px !important; font-weight: 900 !important; color: #ffffff !important; line-height: 1; text-shadow: 2px 2px 4px rgba(0,0,0,0.5); }
+        
+        .device-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+        
+        /* FIX: Full Screen Grid Calculation for TV */
+        body.tv-mode .device-grid { flex-grow: 1; grid-template-columns: repeat(auto-fill, minmax(18vw, 1fr)); grid-auto-rows: 1fr; gap: 1.5vh; overflow-y: auto; align-content: stretch; }
+
+        .device-card { background: #0f172a; padding: 15px; border-radius: 12px; border-left: 6px solid #334155; position: relative; display: flex; flex-direction: column; justify-content: space-between; min-height: 0; }
+        
+        body.tv-mode .device-card { padding: 2vh; }
+        body.tv-mode .device-card b { font-size: 2.2vh; }
+        body.tv-mode .device-card .small { font-size: 1.5vh; }
+
+        body.tv-mode .device-card .small {
+            font-size: 1.5vh;
+            display: block !important;
+            opacity: 0.9 !important;
+            white-space: normal !important;
+            overflow: visible !important;
+            text-overflow: unset !important;
+            line-height: 1.2;
+            margin-top: 0.5vh;
+        }
+
+        .device-card.offline { border-left: 10px solid #ff0000; animation: pulse 0.8s infinite; }
+        .device-card.maintenance { border-left: 6px solid #fbbf24; }
+        
+        @keyframes pulse { 0% { transform: scale(1); background: #0f172a; } 50% { transform: scale(1.01); background: #450a0a; } 100% { transform: scale(1); background: #1c2536; } }
+        
+        .badge-icmp { background-color: #0d6efd !important; color: white; }
+        .badge-tcp { background-color: #f472b6 !important; color: white; } 
+        .badge-zabbix { background-color: #f59e0b !important; color: #000; }
+
+        #incidentBanner { display: none; background: #ff0000; color: white; padding: 1.5vh; text-align: center; font-weight: 900; border-radius: 10px; margin-bottom: 1.5vh; animation: blink 1s infinite; white-space: pre-wrap; font-size: 2.5vh; }
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+        .btn-xs { padding: 1px 5px; font-size: 10px; }
+    </style>
+</head>
+<body>
+
+<div class="container-fluid mt-2">
+    <div class="d-flex justify-content-between align-items-center mb-2 header-main">
+        <h4 class="m-0">KISI NOC Dashboard <span id="roleBadge" class="badge bg-secondary" style="font-size:10px;"></span></h4>
+        <div>
+            <button onclick="toggleTV()" class="btn btn-info btn-sm">TV Mode</button>
+	    <button onclick="toggleGroupMode()" id="groupBtn"class="btn btn-secondary btn-sm">Group Mode</button>
+            <button id="muteBtn" onclick="toggleMute()" class="btn btn-warning btn-sm">Mute</button>
+            <a href="/logout" class="btn btn-danger btn-sm">Logout</a>
+        </div>
+    </div>
+
+    <div class="row g-2 mb-3" id="summaryRow">
+        <div class="col"><div class="summary-box p-2 text-center bg-dark"><div class="summary-label">TOTAL</div><h2 id="totalCount" class="stat-val m-0">0</h2></div></div>
+        <div class="col"><div class="summary-box p-2 text-center" style="background:#022c22;"><div class="summary-label">GOOD/ONLINE</div><h2 id="onlineCount" class="stat-val m-0" style="color: #4ade80 !important;">0</h2></div></div>
+        <div class="col"><div class="summary-box p-2 text-center" style="background:#3f0a0a;"><div class="summary-label">CRITICAL/OFFLINE</div><h2 id="offlineCount" class="stat-val m-0" style="color: #f87171 !important;">0</h2></div></div>
+        <div class="col"><div class="summary-box p-2 text-center" style="background:#422006;"><div class="summary-label">MAINTENANCE</div><h2 id="maintCount" class="stat-val m-0" style="color: #fbbf24 !important;">0</h2></div></div>
+    </div>
+
+    <div id="incidentBanner"></div>
+
+    <div id="addForm" class="card p-3 mb-3 bg-dark border-secondary">
+        <div class="row g-2">
+            <div class="col-md-2" id="hostInputWrap"><input id="targetName" class="form-control form-control-sm bg-dark text-white" placeholder="Host/IP"></div>
+            <div class="col-md-2" id="zabbixHostWrap" style="display:none;"><select id="zabbixHostList" class="form-select form-select-sm bg-dark text-white" onchange="loadZabbixItems(this.value)"><option value="">Select Host...</option></select></div>
+            <div class="col-md-2"><input id="targetDesc" class="form-control form-control-sm bg-dark text-white" placeholder="Description"></div>
+            <div class="col-md-2">
+                <select id="monitorType" class="form-select form-select-sm bg-dark text-white" onchange="toggleMonitorFields()">
+                    <option value="icmp">ICMP (Ping)</option>
+                    <option value="tcp">TCP (Port)</option>
+                    <option value="zabbix">Zabbix Agent</option>
+                    <option value="http_json">HTTP JSON</option>
+                </select>
+            </div>
+            <div class="col-md-1" id="portWrap" style="display:none;"><input id="monitorPort" class="form-control form-control-sm bg-dark text-white" placeholder="Port"></div>
+            <div class="col-md-2" id="zabbixItemWrap" style="display:none;"><select id="zabbixKey" class="form-select form-select-sm bg-dark text-white"><option value="">Select Item...</option></select></div>
+            <div class="col-md-1"><input id="checkInterval" class="form-control form-control-sm bg-dark text-white" value="10"></div>
+            <div class="col-md-1"><input id="timeout" class="form-control form-control-sm bg-dark text-white" value="2"></div>
+            <div class="col-md-1"><button onclick="addTarget()" class="btn btn-primary btn-sm w-100">Add</button></div>
+        </div>
+    </div>
+
+    <div id="deviceGrid" class="device-grid"></div>
+
+    <div class="card p-2 mt-3 history-card bg-dark border-secondary">
+        <h6 class="m-1">Incident History <button id="clearBtn" onclick="clearIncidents()" class="btn btn-xs btn-outline-danger float-end">Clear</button></h6>
+        <div style="max-height:150px; overflow-y:auto;">
+            <table class="table table-dark table-sm m-0 small">
+                <thead><tr><th>Target</th><th>Type</th><th>Down At</th><th>Recovered</th><th>Duration</th></tr></thead>
+                <tbody id="incidentTable"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<audio id="alarmSound" loop><source src="/static/sounds/alarm.ogg" type="audio/ogg"></audio>
+
+<script>
+    const socket = io();
+    let alarmMuted = false,
+    	tvMode = false,
+    	groupMode = true;
+
+    const isAdmin = "{{ session.role }}" === "admin";
+    roleBadge.innerText = "{{ session.role }}".toUpperCase();
+    if(!isAdmin) { if(document.getElementById('addForm')) addForm.remove(); if(document.getElementById('clearBtn')) clearBtn.remove(); }
+
+    socket.on('status_update', () => refresh());
+
+    function toggleMonitorFields() {
+        const type = monitorType.value;
+
+	portWrap.style.display = (type === 'tcp') ? 'block' : 'none';
+
+	hostInputWrap.style.display =
+    		(type === 'zabbix')
+    		? 'none'
+    		: 'block';
+
+	if(type === 'http_json') {
+
+    		targetName.placeholder =
+        		"http://host:port/health";
+
+	} else {
+
+    		targetName.placeholder =
+        		"Host/IP";
+	}
+
+
+        zabbixItemWrap.style.display = (type === 'zabbix') ? 'block' : 'none';
+        zabbixHostWrap.style.display = (type === 'zabbix') ? 'block' : 'none';
+        hostInputWrap.style.display = (type === 'zabbix') ? 'none' : 'block';
+        if (type === 'zabbix') {
+            fetch("/zabbix_hosts").then(r => r.json()).then(hosts => {
+                let options = '<option value="">Select Host...</option>';
+                hosts.forEach(h => options += `<option value="${h.hostid}">${h.name}</option>`);
+                zabbixHostList.innerHTML = options;
+            });
+        }
+    }
+
+    function loadZabbixItems(hostid) {
+        if(!hostid) return;
+        fetch(`/zabbix_items/${hostid}`).then(r => r.json()).then(items => {
+            let options = '<option value="">Select Item...</option>';
+            items.forEach(i => options += `<option value="${i.key_}">${i.name}</option>`);
+            zabbixKey.innerHTML = options;
+        });
+    }
+
+    function refresh() {
+        fetch("/status").then(r => r.json()).then(data => {
+            let html = "", offItems = [];
+            let counts = { t:0, o:0, f:0, m:0 };
+
+
+/* --- GROUP MODE --- */
+
+
+if(!groupMode) {
+
+    data.forEach(d => {
+
+        counts.t++;
+
+        let cls = "online";
+        let stText = d.status;
+
+        let mType = (d.monitor_type || "").toLowerCase();
+
+        if(d.maintenance) {
+
+            counts.m++;
+
+            cls = "maintenance";
+
+            stText = "Maintenance";
+
+        } else if(d.status !== "Online") {
+
+            counts.f++;
+
+            cls = "offline";
+
+            stText = (
+                mType === 'zabbix'
+                && (d.zabbix_item_key || "").match(/usage|util|pused|cpu|load/i)
+            )
+            ? "HIGH USAGE"
+            : "OFFLINE";
+
+            offItems.push(
+                d.description
+                ? `${d.name} (${d.description})`
+                : `${d.name}`
+            );
+
+        } else {
+
+            counts.o++;
+        }
+
+        let mTypeLabel = 'ICMP',
+            badgeClass = 'badge-icmp';
+
+        if(mType === 'tcp') {
+
+            mTypeLabel = `TCP:${d.monitor_port}`;
+
+            badgeClass = 'badge-tcp';
+
+        } else if(mType === 'zabbix') {
+
+            mTypeLabel = 'ZABBIX';
+
+            badgeClass = 'badge-zabbix';
+
+        } else if(mType === 'http_json') {
+
+            mTypeLabel = 'HTTP_JSON';
+
+            badgeClass = 'bg-info';
+        }
+
+        html += `
+            <div class="device-card ${cls}">
+
+                <div>
+
+                    <div class="d-flex justify-content-between align-items-start">
+
+                        <div style="max-width:70%;">
+
+                            <b class="d-block text-truncate">
+                                ${d.name}
+                            </b>
+
+                            <div class="small opacity-75 ${tvMode ? '' : 'text-truncate'}">
+                                ${d.description || ''}
+                            </div>
+
+                        </div>
+
+                        <div class="fw-bold"
+                            style="color:${
+                                cls=='offline'
+                                ? '#ff4444'
+                                : (
+                                    cls=='maintenance'
+                                    ? '#fbbf24'
+                                    : '#4ade80'
+                                )
+                            }">
+
+                            ${stText}
+                        </div>
+
+                    </div>
+
+                    <div class="mt-2">
+
+                        <span class="badge ${badgeClass}">
+                            ${mTypeLabel}
+                        </span>
+
+                    </div>
+
+                </div>
+
+                ${
+                    isAdmin && !tvMode
+                    ? `
+                    <div class="mt-3 text-end">
+
+                        <button onclick='editT(${JSON.stringify(d)})'
+                            class="btn btn-xs btn-warning">
+                            Edit
+                        </button>
+
+                        <button onclick="toggleMaint(${d.id})"
+                            class="btn btn-xs btn-secondary">
+                            M
+                        </button>
+
+                        <button onclick="delT(${d.id})"
+                            class="btn btn-xs btn-danger">
+                            X
+                        </button>
+
+                    </div>
+                    `
+                    : ''
+                }
+
+            </div>
+        `;
+    });
+
+    deviceGrid.innerHTML = html;
+
+    totalCount.innerText = counts.t;
+    onlineCount.innerText = counts.o;
+    offlineCount.innerText = counts.f;
+    maintCount.innerText = counts.m;
+
+    return;
+}
+
+
+const groups = {};
+
+data.forEach(d => {
+
+
+    const mType = (d.monitor_type || "").toLowerCase();
+
+
+    let groupKey = "ICMP";
+
+    if(mType === "icmp") {
+	
+	groupKey = "ICMP";
+   }
+
+
+    if(mType === "tcp") {
+
+        groupKey = `TCP:${d.monitor_port}`;
+
+    } else if(mType === "zabbix") {
+
+
+	let zKey = d.zabbix_item_key || "";
+
+	let keyPart = zKey.includes('.')
+    	    ? zKey.split('.').pop()
+            : zKey;
+
+
+        groupKey = `ZBX:${keyPart.toUpperCase()}`;
+
+    } else if(mType === "http_json") {
+
+        groupKey = "HTTP_JSON";
+    }
+
+    if(!groups[groupKey]) {
+
+        groups[groupKey] = [];
+    }
+
+    groups[groupKey].push(d);
+});
+
+Object.keys(groups).forEach(groupName => {
+
+    const hosts = groups[groupName];
+
+    let groupOffline = false;
+    let groupMaint = false;
+
+    let hostRows = "";
+    let offlineCountInGroup = 0;
+
+    hosts.forEach(d => {
+
+	counts.t++;
+        let cls = "online";
+        let stText = d.status;
+
+        if(d.maintenance) {
+
+            counts.m++;
+
+            cls = "maintenance";
+
+            stText = "Maintenance";
+
+            groupMaint = true;
+
+        } else if(d.status !== "Online") {
+
+            counts.f++;
+
+            cls = "offline";
+
+            stText = (
+                d.monitor_type.toLowerCase() === 'zabbix'
+                && (d.zabbix_item_key || "").match(/usage|util|pused|cpu|load/i)
+            )
+            ? "HIGH USAGE"
+            : "OFFLINE";
+
+	    offlineCountInGroup++;
+
+            offItems.push(
+                d.description
+                ? `${d.name} (${d.description})`
+                : `${d.name}`
+            );
+
+        } else {
+
+            counts.o++;
+        }
+
+        hostRows += `
+            <div class="d-flex justify-content-between align-items-center border-top border-secondary pt-1 mt-1">
+
+                <div style="max-width:65%; overflow:hidden;">
+
+                    <div class="fw-bold text-truncate">
+                        ${d.name}
+                    </div>
+
+                    <div class="small opacity-75 ${tvMode ? '' : 'text-truncate'}">
+                        ${d.description || ''}
+                    </div>
+
+                </div>
+
+                <div class="text-end">
+
+                    <div class="fw-bold"
+                        style="color:${
+                            cls=='offline'
+                            ? '#ff4444'
+                            : (
+                                cls=='maintenance'
+                                ? '#fbbf24'
+                                : '#4ade80'
+                            )
+                        }">
+
+                        ${stText}
+                    </div>
+
+                    ${
+                        isAdmin && !tvMode
+                        ? `
+                        <div class="mt-1">
+                            <button onclick='editT(${JSON.stringify(d)})'
+                                class="btn btn-xs btn-warning">
+                                Edit
+                            </button>
+
+                            <button onclick="toggleMaint(${d.id})"
+                                class="btn btn-xs btn-secondary">
+                                M
+                            </button>
+
+                            <button onclick="delT(${d.id})"
+                                class="btn btn-xs btn-danger">
+                                X
+                            </button>
+                        </div>
+                        `
+                        : ''
+                    }
+
+                </div>
+
+            </div>
+        `;
+    });
+
+    let cardClass = "";
+
+
+    if(
+    	offlineCountInGroup === hosts.length
+    	&& hosts.length > 0
+    ) {
+
+    cardClass = "offline";
+
+    } else if(groupMaint) {
+
+        cardClass = "maintenance";
+    }
+
+    html += `
+        <div class="device-card ${cardClass}">
+
+            <div class="d-flex justify-content-between align-items-center">
+
+                <b>
+                    ${groupName}
+                </b>
+
+                <span class="badge bg-secondary">
+                    ${hosts.length} Hosts
+                </span>
+
+            </div>
+
+
+	   <div class="small opacity-75 mb-2 d-flex justify-content-between">
+
+    		<span>
+        	Grouped Monitoring
+    		</span>
+
+    		<span>
+        	✅ ${hosts.filter(h => h.status === 'Online' && !h.maintenance).length}
+        	|
+        	❌ ${offlineCountInGroup}
+        	|
+        	🟡 ${hosts.filter(h => h.maintenance).length}
+    		</span>
+
+	</div>
+
+
+		<div style="max-height:${tvMode ? '35vh' : '300px'}; overflow-y:auto;">
+    		${hostRows}
+		</div>
+
+        </div>
+    `;
+});
+
+deviceGrid.innerHTML = html;
+ 
+
+
+           totalCount.innerText = counts.t; onlineCount.innerText = counts.o; offlineCount.innerText = counts.f; maintCount.innerText = counts.m;
+            
+            if(offItems.length > 0) {
+                incidentBanner.style.display = "block";
+                incidentBanner.innerText = "🚨 EMERGENCY: ALERTS ACTIVE 🚨\n" + offItems.join("\n");
+                if(!alarmMuted) alarmSound.play().catch(()=>{});
+            } else { incidentBanner.style.display = "none"; alarmSound.pause(); }
+        });
+        if(!tvMode) {
+            fetch("/incidents").then(r => r.json()).then(data => {
+                let rows = "";
+                data.forEach(i => rows += `<tr><td>${i.target}</td><td>${i.monitor_detail}</td><td>${i.down_time}</td><td>${i.up_time||'-'}</td><td>${i.duration||'-'}</td></tr>`);
+                incidentTable.innerHTML = rows;
+            });
+        }
+    }
+
+    function addTarget() {
+        const type = monitorType.value;
+        const sel = zabbixHostList;
+        const p = new URLSearchParams();
+        p.append("name", type === 'zabbix' ? sel.options[sel.selectedIndex].text : targetName.value);
+        p.append("description", targetDesc.value); p.append("monitor_type", type);
+        p.append("monitor_port", monitorPort.value || 0); p.append("zabbix_item_key", zabbixKey.value || "");
+        p.append("zabbix_host_id", type === 'zabbix' ? sel.value : "");
+        p.append("check_interval", checkInterval.value); p.append("timeout", timeout.value);
+        fetch("/add", {method:"POST", body:p}).then(() => { targetName.value=""; targetDesc.value=""; refresh(); });
+    }
+
+    /* Keep administrative tools intact */
+    function editT(d) {
+        const nDesc = prompt("New Description:", d.description); if(nDesc===null) return;
+        const nInt = prompt("New Interval (sec):", d.check_interval); if(nInt===null) return;
+        const nOut = prompt("New Timeout (sec):", d.timeout); if(nOut===null) return;
+        const p = new URLSearchParams(); p.append("description", nDesc); p.append("check_interval", nInt); p.append("timeout", nOut);
+        fetch("/update_target/"+d.id, {method:"POST", body:p}).then(()=>refresh());
+    }
+
+    function toggleTV() { tvMode = !tvMode; document.body.classList.toggle("tv-mode", tvMode); if(tvMode) document.documentElement.requestFullscreen().catch(()=>{}); else if (document.fullscreenElement) document.exitFullscreen(); refresh(); }
+
+    function toggleGroupMode() {
+
+    	groupMode = !groupMode;
+
+    	groupBtn.innerText =
+        	groupMode
+        	? "Grouped"
+        	: "Single";
+
+    	refresh();
+	}
+
+    function toggleMute() { alarmMuted = !alarmMuted; muteBtn.innerText = alarmMuted ? "Unmute" : "Mute"; if(alarmMuted) alarmSound.pause(); }
+    function toggleMaint(id) { fetch("/toggle_maintenance/"+id, {method:"POST"}).then(()=>refresh()); }
+    function delT(id) { if(confirm("Delete Host?")) fetch("/remove/"+id, {method:"POST"}).then(()=>refresh()); }
+    function clearIncidents() { if(confirm("Clear Logs?")) fetch("/clear_incidents", {method:"POST"}).then(()=>refresh()); }
+
+    refresh();
+</script>
+</body>
+</html>

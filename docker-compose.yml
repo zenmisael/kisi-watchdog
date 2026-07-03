@@ -1,0 +1,26 @@
+version: "3.8"
+
+services:
+  noc:
+    build: .
+    container_name: borged
+
+    network_mode: host
+#    ports:
+#      - "5555:5555"
+
+    volumes:
+      - ./data:/app/data
+      - ./templates:/app/templates
+
+    cap_add:
+      - NET_RAW
+
+    environment:
+      TZ: Asia/Jakarta
+    # Secrets (TELEGRAM_*, ZABBIX_*, SECRET_KEY) live in .env, which is
+    # gitignored. Copy .env.example to .env and fill in real values.
+    env_file:
+      - .env
+
+    restart: unless-stopped
