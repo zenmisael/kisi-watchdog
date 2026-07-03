@@ -104,7 +104,11 @@ MONITOR_STARTED = False
 
 def get_db():
     os.makedirs("data", exist_ok=True)
-    c = sqlite3.connect(DB); c.row_factory = sqlite3.Row
+    # timeout + WAL let concurrent monitor tasks read/write without hitting
+    # "database is locked" under load.
+    c = sqlite3.connect(DB, timeout=30); c.row_factory = sqlite3.Row
+    c.execute("PRAGMA journal_mode=WAL")
+    c.execute("PRAGMA busy_timeout=30000")
     return c
 
 def init_db():
@@ -737,12 +741,7 @@ def add():
 def remove(id):
     conn = get_db(); t = conn.execute("SELECT name, description FROM targets WHERE id=?", (id,)).fetchone()
     conn.execute("DELETE FROM targets WHERE id=?", (id,)); conn.commit(); conn.close()
-    if id in tasks:
-        tasks[id].cancel()
-        del tasks[id]
-
-    if id in task_owners:
-        del task_owners[id]
+    loop.call_soon_threadsafe(stop_task, id)
     send_telegram(t['name'], t['description'], None, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), event_type="REMOVED HOST")
     socketio.emit('status_update'); return jsonify({"ok": 1})
 
@@ -791,14 +790,7 @@ def update_target(id):
     p = request.form
     conn = get_db(); conn.execute("UPDATE targets SET description=?, check_interval=?, timeout=? WHERE id=?", (p["description"], p["check_interval"], p["timeout"], id))
     conn.commit(); conn.close()
-    if id in tasks:
-        tasks[id].cancel()
-        del tasks[id]
-
-    if id in task_owners:
-        del task_owners[id]
-
-    loop.call_soon_threadsafe(start_task, id)
+    loop.call_soon_threadsafe(restart_task, id)
     socketio.emit('status_update'); return jsonify({"ok": 1})
 
 @app.route("/clear_incidents", methods=["POST"])
@@ -825,6 +817,19 @@ def start_task(tid):
 
     tasks[tid] = new_task
     task_owners[tid] = id(new_task)
+
+# stop_task / restart_task mutate the task dicts and cancel asyncio Tasks, so
+# they MUST run on the loop thread — always call via loop.call_soon_threadsafe.
+def stop_task(tid):
+    task = tasks.pop(tid, None)
+    task_owners.pop(tid, None)
+    if task:
+        task.cancel()
+
+def restart_task(tid):
+    stop_task(tid)
+    start_task(tid)
+
 def run_loop():
     asyncio.set_event_loop(loop)
     conn = get_db()
