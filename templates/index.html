@@ -116,7 +116,8 @@
             <button onclick="toggleTV()" class="btn btn-info btn-sm">TV Mode</button>
 	    <button onclick="toggleGroupMode()" id="groupBtn"class="btn btn-secondary btn-sm">Single</button>
             <button id="muteBtn" onclick="toggleMute()" class="btn btn-warning btn-sm">Mute</button>
-            <a href="/logout" class="btn btn-danger btn-sm">Logout</a>
+            <a href="/login" id="adminBtn" class="btn btn-primary btn-sm">Admin</a>
+            <a href="/logout" id="logoutBtn" class="btn btn-danger btn-sm">Logout</a>
         </div>
     </div>
 
@@ -172,8 +173,16 @@
     	groupMode = false;
 
     const isAdmin = "{{ session.role }}" === "admin";
-    roleBadge.innerText = "{{ session.role }}".toUpperCase();
-    if(!isAdmin) { if(document.getElementById('addForm')) addForm.remove(); if(document.getElementById('clearBtn')) clearBtn.remove(); }
+    roleBadge.innerText = isAdmin ? "ADMIN" : "VIEW";
+    if(isAdmin) {
+        // logged-in admin: hide the "Admin" login button, keep Logout + controls
+        if(document.getElementById('adminBtn')) adminBtn.remove();
+    } else {
+        // anonymous viewer: show "Admin" login, hide Logout + admin-only controls
+        if(document.getElementById('logoutBtn')) logoutBtn.remove();
+        if(document.getElementById('addForm')) addForm.remove();
+        if(document.getElementById('clearBtn')) clearBtn.remove();
+    }
 
     socket.on('status_update', () => refresh());
 

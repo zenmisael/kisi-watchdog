@@ -696,7 +696,8 @@ def send_telegram(host, desc, check, time, duration=None, event_type=None):
 
 @app.route("/")
 def index():
-    if "user" not in session: return redirect("/login")
+    # Viewing is open (no login). Admin controls are gated by @require_admin
+    # on the mutating routes and hidden in the UI for non-admins.
     return render_template("index.html")
 
 @app.route("/login", methods=["GET", "POST"])
@@ -717,14 +718,12 @@ def login():
     return render_template("login.html")
 
 @app.route("/logout")
-def logout(): session.clear(); return redirect("/login")
+def logout(): session.clear(); return redirect("/")
 
 @app.route("/status")
-@require_login
 def status(): return jsonify([dict(r) for r in get_db().execute("SELECT * FROM targets")])
 
 @app.route("/incidents")
-@require_login
 def incidents(): return jsonify([dict(r) for r in get_db().execute("SELECT * FROM incidents ORDER BY id DESC LIMIT 15")])
 
 @app.route("/add", methods=["POST"])
