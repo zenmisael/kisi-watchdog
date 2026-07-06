@@ -114,7 +114,7 @@
         <h4 class="m-0">KISI NOC Dashboard <span id="roleBadge" class="badge bg-secondary" style="font-size:10px;"></span></h4>
         <div>
             <button onclick="toggleTV()" class="btn btn-info btn-sm">TV Mode</button>
-	    <button onclick="toggleGroupMode()" id="groupBtn"class="btn btn-secondary btn-sm">Group Mode</button>
+	    <button onclick="toggleGroupMode()" id="groupBtn"class="btn btn-secondary btn-sm">Single</button>
             <button id="muteBtn" onclick="toggleMute()" class="btn btn-warning btn-sm">Mute</button>
             <a href="/logout" class="btn btn-danger btn-sm">Logout</a>
         </div>
@@ -169,7 +169,7 @@
     const socket = io();
     let alarmMuted = false,
     	tvMode = false,
-    	groupMode = true;
+    	groupMode = false;
 
     const isAdmin = "{{ session.role }}" === "admin";
     roleBadge.innerText = "{{ session.role }}".toUpperCase();
