@@ -204,10 +204,24 @@ def _fmt_value(raw, units):
     raw = str(raw).strip()
     try:
         f = float(raw)
-        raw = (f"{f:.1f}".rstrip("0").rstrip(".")) if abs(f) < 10000 else f"{f:.0f}"
     except (ValueError, TypeError):
-        pass
-    return f"{raw}{units}" if units and raw != "" else raw
+        return f"{raw}{units}" if units and raw != "" else raw
+    u = (units or "").strip()
+
+    def scaled(val, step, prefixes, base):
+        for p in prefixes:
+            if abs(val) < step or p == prefixes[-1]:
+                n = f"{val:.1f}".rstrip("0").rstrip(".")
+                return f"{n} {p}{base}"
+            val /= step
+    # Byte / byte-rate units -> 1024-based (matches Zabbix); bit-rate -> 1000-based
+    if u in ("B", "Bps"):
+        return scaled(f, 1024.0, ["", "K", "M", "G", "T", "P"], "B" + u[1:])
+    if u == "bps":
+        return scaled(f, 1000.0, ["", "K", "M", "G", "T"], "bps")
+    # everything else: round sensibly, keep the unit (%, etc.)
+    n = (f"{f:.1f}".rstrip("0").rstrip(".")) if abs(f) < 10000 else f"{f:.0f}"
+    return f"{n}{u}" if u else n
 
 
 async def check_zabbix_status(hostid, item_key):
