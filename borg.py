@@ -191,9 +191,13 @@ def list_zabbix_items(hostid):
 # --- MONITORING LOGIC ---
 ZBX_UP = {"1", "up", "ok", "online", "running", "connected", "true"}
 ZBX_DOWN = {"0", "down", "offline", "false", "fail", "failed", "dead"}
-# Zabbix severity -> dashboard state: High/Disaster ring the alarm (critical);
-# Warning/Average are amber (degraded, silent); below that is ok.
-ZBX_SEV = {0: "ok", 1: "ok", 2: "degraded", 3: "degraded", 4: "critical", 5: "critical"}
+# Alarm threshold: Zabbix severities >= this map to CRITICAL (red + sound +
+# Telegram); Warning below it is amber (degraded, silent); below Warning is ok.
+# Default 3 (Average) -> your >90% (Average) triggers alarm, >80% (Warning) go
+# amber. Tune via .env without code changes:
+#   ZABBIX_ALARM_MIN_SEVERITY = 5 Disaster | 4 High | 3 Average (default) | 2 Warning
+# Zabbix severities: 0 NotClassified, 1 Info, 2 Warning, 3 Average, 4 High, 5 Disaster.
+ZBX_ALARM_MIN_SEV = int(os.getenv("ZABBIX_ALARM_MIN_SEVERITY", "3"))
 
 
 def _fmt_value(raw, units):
@@ -257,7 +261,8 @@ async def check_zabbix_status(hostid, item_key):
                 if probs:
                     top = max(probs, key=lambda p: int(p.get("severity", 0)))
                     sev = int(top.get("severity", 0))
-                    state = ZBX_SEV.get(sev, "ok")
+                    state = ("critical" if sev >= ZBX_ALARM_MIN_SEV
+                             else "degraded" if sev >= 2 else "ok")
                     acked = top.get("acknowledged") == "1"
                     if state == "critical" and acked:
                         state = "degraded"   # someone's on it -> silence alarm
