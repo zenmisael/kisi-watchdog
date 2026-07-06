@@ -529,9 +529,17 @@ async def monitor_target(tid):
 
                     if t["status"] == "Offline":
 
-                        down_dt = datetime.strptime(
-                            t["last_down"],
-                            "%Y-%m-%d %H:%M:%S"
+                        # last_down is normally set when a target goes Offline,
+                        # but guard against NULL: strptime(None) would throw, get
+                        # swallowed by the error handler, and trap the target
+                        # Offline forever even though it's healthy again.
+                        down_dt = (
+                            datetime.strptime(
+                                t["last_down"],
+                                "%Y-%m-%d %H:%M:%S"
+                            )
+                            if t["last_down"]
+                            else now
                         )
 
                         dur_str = str(
