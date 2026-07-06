@@ -189,7 +189,8 @@ def list_zabbix_items(hostid):
     except: return jsonify([])
 
 # --- MONITORING LOGIC ---
-ZBX_UP = {"1", "connected", "up", "running", "online", "ok"}
+ZBX_UP = {"1", "up", "ok", "online", "running", "connected", "true"}
+ZBX_DOWN = {"0", "down", "offline", "false", "fail", "failed", "dead"}
 # Zabbix severity -> dashboard state: High/Disaster ring the alarm (critical);
 # Warning/Average are amber (degraded, silent); below that is ok.
 ZBX_SEV = {0: "ok", 1: "ok", 2: "degraded", 3: "degraded", 4: "critical", 5: "critical"}
@@ -207,9 +208,9 @@ def _fmt_value(raw, units):
 
 async def check_zabbix_status(hostid, item_key):
     """Return {'state','detail'}:
-      critical = unacked High/Disaster problem (or a boolean probe reading down)
+      critical = boolean probe DOWN (0), or unacked High/Disaster problem
       degraded = Warning/Average, or an acknowledged High/Disaster (amber, no alarm)
-      ok       = healthy; detail carries the live value
+      ok       = healthy; detail is the live value (or 'UP' for a boolean probe)
       unknown  = Zabbix unreachable/unauthenticated (hold last status)."""
 
     def _fetch():
@@ -231,9 +232,21 @@ async def check_zabbix_status(hostid, item_key):
             if not items:
                 return {"state": "critical", "detail": "item not found"}
             it = items[0]
-            valdisp = _fmt_value(it.get("lastvalue", ""), it.get("units", ""))
+            raw = str(it.get("lastvalue", "")).strip()
+            units = it.get("units", "")
 
-            # Triggers that use this item -> their active problems (accurate link)
+            # Boolean up/down probe (no units, value 0/1 or an up/down word):
+            # the value itself is authoritative -> UP (ok) / DOWN (critical, alarm).
+            if not units:
+                low = raw.lower()
+                if low in ZBX_UP:
+                    return {"state": "ok", "detail": "UP"}
+                if low in ZBX_DOWN:
+                    return {"state": "critical", "detail": "DOWN"}
+
+            valdisp = _fmt_value(raw, units)
+
+            # Resource/metric: derive state from the item's active problems.
             trigs = zbx("trigger.get", {"itemids": [it["itemid"]],
                                         "output": ["triggerid"]}, 2)
             if trigs:
@@ -253,13 +266,8 @@ async def check_zabbix_status(hostid, item_key):
                     if acked:
                         detail += " (ack)"
                     return {"state": state, "detail": detail}
-                return {"state": "ok", "detail": valdisp}
 
-            # No trigger on the item -> treat as a boolean up/down probe
-            raw = str(it.get("lastvalue", "")).strip().lower()
-            if raw in ZBX_UP:
-                return {"state": "ok", "detail": ""}
-            return {"state": "critical", "detail": f"value={valdisp}"}
+            return {"state": "ok", "detail": valdisp}
 
         except Exception as e:
             print("ZABBIX CHECK ERROR:", e)
