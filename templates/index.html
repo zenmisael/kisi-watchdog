@@ -186,6 +186,18 @@
 
     socket.on('status_update', () => refresh());
 
+    // Shared alarm/banner — runs for BOTH single and grouped views.
+    function updateAlarm(offItems) {
+        if(offItems.length > 0) {
+            incidentBanner.style.display = "block";
+            incidentBanner.innerText = "🚨 EMERGENCY: ALERTS ACTIVE 🚨\n" + offItems.join("\n");
+            if(!alarmMuted) alarmSound.play().catch(()=>{});
+        } else {
+            incidentBanner.style.display = "none";
+            alarmSound.pause();
+        }
+    }
+
     function toggleMonitorFields() {
         const type = monitorType.value;
 
@@ -385,6 +397,7 @@ if(!groupMode) {
     offlineCount.innerText = counts.f;
     maintCount.innerText = counts.m;
 
+    updateAlarm(offItems);
     scheduleFit();
     return;
 }
@@ -513,11 +526,7 @@ deviceGrid.innerHTML = html;
 
            totalCount.innerText = counts.t; onlineCount.innerText = counts.o; offlineCount.innerText = counts.f; maintCount.innerText = counts.m;
             
-            if(offItems.length > 0) {
-                incidentBanner.style.display = "block";
-                incidentBanner.innerText = "🚨 EMERGENCY: ALERTS ACTIVE 🚨\n" + offItems.join("\n");
-                if(!alarmMuted) alarmSound.play().catch(()=>{});
-            } else { incidentBanner.style.display = "none"; alarmSound.pause(); }
+            updateAlarm(offItems);
             scheduleFit();
         });
         if(!tvMode) {
