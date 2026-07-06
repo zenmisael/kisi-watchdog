@@ -125,12 +125,15 @@ def init_db():
             monitor_type TEXT, monitor_port TEXT, status TEXT DEFAULT 'Online',
             last_down TEXT, last_check TEXT, fail_count INTEGER DEFAULT 0,
             maintenance INTEGER DEFAULT 0, check_interval INTEGER DEFAULT 10, timeout INTEGER DEFAULT 2,
-            zabbix_item_key TEXT, zabbix_host_id TEXT,
+            zabbix_item_key TEXT, zabbix_host_id TEXT, detail TEXT,
             UNIQUE(name, monitor_type, monitor_port, zabbix_item_key)
         )""")
     else:
         if "zabbix_host_id" not in columns:
             c.execute("ALTER TABLE targets ADD COLUMN zabbix_host_id TEXT")
+        if "detail" not in columns:
+            # Zabbix live value + problem name shown on the card
+            c.execute("ALTER TABLE targets ADD COLUMN detail TEXT")
 
     def ensure(u, p, r):
         if not c.execute("SELECT 1 FROM users WHERE username=?", (u,)).fetchone():
@@ -186,189 +189,84 @@ def list_zabbix_items(hostid):
     except: return jsonify([])
 
 # --- MONITORING LOGIC ---
+ZBX_UP = {"1", "connected", "up", "running", "online", "ok"}
+# Zabbix severity -> dashboard state: High/Disaster ring the alarm (critical);
+# Warning/Average are amber (degraded, silent); below that is ok.
+ZBX_SEV = {0: "ok", 1: "ok", 2: "degraded", 3: "degraded", 4: "critical", 5: "critical"}
+
+
+def _fmt_value(raw, units):
+    raw = str(raw).strip()
+    try:
+        f = float(raw)
+        raw = (f"{f:.1f}".rstrip("0").rstrip(".")) if abs(f) < 10000 else f"{f:.0f}"
+    except (ValueError, TypeError):
+        pass
+    return f"{raw}{units}" if units and raw != "" else raw
+
+
 async def check_zabbix_status(hostid, item_key):
+    """Return {'state','detail'}:
+      critical = unacked High/Disaster problem (or a boolean probe reading down)
+      degraded = Warning/Average, or an acknowledged High/Disaster (amber, no alarm)
+      ok       = healthy; detail carries the live value
+      unknown  = Zabbix unreachable/unauthenticated (hold last status)."""
 
     def _fetch():
-
         token = get_zabbix_token()
-
-        # No token = can't reach/authenticate Zabbix. Return None ("unknown")
-        # so monitor_target keeps the last status instead of flipping every
-        # Zabbix target to Offline (and spamming incidents/Telegram).
         if not token:
-            return None
+            return {"state": "unknown", "detail": ""}
         if not hostid:
-            return False
-
+            return {"state": "critical", "detail": "no host id"}
         try:
+            def zbx(method, params, idn):
+                p = {"jsonrpc": "2.0", "method": method, "params": params,
+                     "auth": token, "id": idn}
+                return requests.post(ZABBIX_URL, json=p, timeout=5,
+                                     verify=False).json().get("result", [])
 
-            item_p = {
-                "jsonrpc": "2.0",
-                "method": "item.get",
-                "params": {
-                    "hostids": hostid,
-                    "search": {
-                        "key_": item_key
-                    },
-                    "output": ["lastvalue"]
-                },
-                "auth": token,
-                "id": 1
-            }
-
-            res = requests.post(
-                ZABBIX_URL,
-                json=item_p,
-                timeout=5,
-                verify=False
-            ).json()
-
-            items = res.get("result", [])
-
+            items = zbx("item.get", {"hostids": hostid,
+                                     "search": {"key_": item_key},
+                                     "output": ["itemid", "lastvalue", "units"]}, 1)
             if not items:
-                return False
+                return {"state": "critical", "detail": "item not found"}
+            it = items[0]
+            valdisp = _fmt_value(it.get("lastvalue", ""), it.get("units", ""))
 
-            val_raw = str(
-                items[0].get("lastvalue", "")
-            ).strip().lower()
+            # Triggers that use this item -> their active problems (accurate link)
+            trigs = zbx("trigger.get", {"itemids": [it["itemid"]],
+                                        "output": ["triggerid"]}, 2)
+            if trigs:
+                probs = zbx("problem.get",
+                            {"objectids": [t["triggerid"] for t in trigs],
+                             "output": ["name", "severity", "acknowledged"],
+                             "recent": False}, 3)
+                if probs:
+                    top = max(probs, key=lambda p: int(p.get("severity", 0)))
+                    sev = int(top.get("severity", 0))
+                    state = ZBX_SEV.get(sev, "ok")
+                    acked = top.get("acknowledged") == "1"
+                    if state == "critical" and acked:
+                        state = "degraded"   # someone's on it -> silence alarm
+                    name = str(top.get("name", "")).strip()
+                    detail = f"{valdisp} · {name}".strip(" ·")
+                    if acked:
+                        detail += " (ack)"
+                    return {"state": state, "detail": detail}
+                return {"state": "ok", "detail": valdisp}
 
-            # ZABBIX RESOURCE MONITORING VIA TRIGGER STATE
-            resource_keys = [
-                "utilization",
-                "usage",
-                "pused",
-                "util",
-                "load",
-                "memory",
-                "mem",
-                "ram",
-                "disk",
-                "storage",
-                "cpu"
-            ]
-
-            if any(
-                k in item_key.lower()
-                for k in resource_keys
-            ):
-
-                trigger_p = {
-                    "jsonrpc": "2.0",
-                    "method": "trigger.get",
-                    "params": {
-                        "hostids": hostid,
-                        "output": [
-                            "description",
-                            "value"
-                        ]
-                    },
-                    "auth": token,
-                    "id": 2
-                }
-
-                trig_res = requests.post(
-                    ZABBIX_URL,
-                    json=trigger_p,
-                    timeout=5,
-                    verify=False
-                ).json()
-
-                triggers = trig_res.get(
-                    "result",
-                    []
-                )
-
-                trigger_keywords = []
-
-                ik = item_key.lower()
-
-                if "cpu" in ik or "load" in ik:
-
-                    trigger_keywords = [
-                        "cpu",
-                        "load"
-                    ]
-
-                elif (
-                    "memory" in ik or
-                    "mem" in ik or
-                    "ram" in ik
-                ):
-
-                    trigger_keywords = [
-                        "memory",
-                        "ram"
-                    ]
-
-                elif (
-                    "disk" in ik or
-                    "storage" in ik or
-                    "space" in ik or
-                    "pused" in ik
-                ):
-
-                    trigger_keywords = [
-                        "disk",
-                        "storage",
-                        "space"
-                    ]
-
-                else:
-
-                    trigger_keywords = [
-                        item_key.lower()
-                    ]
-
-                for trig in triggers:
-
-                    desc = str(
-                        trig.get(
-                            "description",
-                            ""
-                        )
-                    ).lower()
-
-                    active = (
-                        str(
-                            trig.get("value")
-                        ) == "1"
-                    )
-
-                    if not active:
-                        continue
-
-                    if any(
-                        k in desc
-                        for k in trigger_keywords
-                    ):
-
-                        return False
-
-                return True
-
-            return val_raw in [
-                "1",
-                "connected",
-                "up",
-                "running",
-                "online",
-                "ok"
-            ]
+            # No trigger on the item -> treat as a boolean up/down probe
+            raw = str(it.get("lastvalue", "")).strip().lower()
+            if raw in ZBX_UP:
+                return {"state": "ok", "detail": ""}
+            return {"state": "critical", "detail": f"value={valdisp}"}
 
         except Exception as e:
+            print("ZABBIX CHECK ERROR:", e)
+            return {"state": "unknown", "detail": ""}
 
-            print(
-                "ZABBIX CHECK ERROR:",
-                e
-            )
+    return await loop.run_in_executor(None, _fetch)
 
-            # Network/API error — treat as "unknown", not a real outage.
-            return None
-
-    return await loop.run_in_executor(
-        None,
-        _fetch
-    )
 
 async def check_icmp(host, timeout):
     try:
@@ -515,152 +413,104 @@ async def monitor_target(tid):
                     "%Y-%m-%d %H:%M:%S"
                 )
 
-                if ok is None:
+                # --- normalize check result into (state, detail) ---
+                # Zabbix returns {'state','detail'}; ICMP/TCP/HTTP return bool/None.
+                detail = None
+                if isinstance(ok, dict):
+                    detail = ok.get("detail", "")
+                    state = {"critical": "offline", "degraded": "degraded",
+                             "ok": "ok", "unknown": "unknown"}.get(ok.get("state"), "unknown")
+                elif ok is None:
+                    state = "unknown"
+                else:
+                    state = "ok" if ok else "offline"
+                    detail = ""
 
-                    # "Unknown" (e.g. Zabbix unreachable/unauthenticated):
-                    # record the check time but keep the last status. Do NOT
-                    # count a failure, flip to Offline, or fire an alert.
+                if state == "unknown":
+
+                    # Zabbix unreachable/unauthenticated: record the check time,
+                    # keep status AND last known detail. No failure, no alarm.
                     c.execute(
                         "UPDATE targets SET last_check=? WHERE id=?",
                         (ts, tid)
                     )
 
-                elif ok:
+                elif state == "degraded":
 
-                    if t["status"] == "Offline":
-
-                        # last_down is normally set when a target goes Offline,
-                        # but guard against NULL: strptime(None) would throw, get
-                        # swallowed by the error handler, and trap the target
-                        # Offline forever even though it's healthy again.
-                        down_dt = (
-                            datetime.strptime(
-                                t["last_down"],
-                                "%Y-%m-%d %H:%M:%S"
-                            )
-                            if t["last_down"]
-                            else now
-                        )
-
-                        dur_str = str(
-                            now - down_dt
-                        ).split(".")[0]
-
-                        c.execute("""
-                        UPDATE targets
-                        SET status='Online',
-                            fail_count=0,
-                            last_down=NULL,
-                            last_check=?
-                        WHERE id=?
-                        """, (
-                            ts,
-                            tid
-                        ))
-
-                        if c.rowcount > 0:
-
-                            conn.commit()
-
-                            if (
-                                now - down_dt
-                            ).total_seconds() >= MIN_OUTAGE_DURATION:
-
-                                c.execute("""
-                                UPDATE incidents
-                                SET up_time=?,
-                                    duration=?
-                                WHERE target=?
-                                AND up_time IS NULL
-                                """, (
-                                    ts,
-                                    dur_str,
-                                    t["name"]
-                                ))
-
-                                conn.commit()
-
-                            send_telegram(
-                                t['name'],
-                                t['description'],
-                                m_info,
-                                ts,
-                                dur_str
-                            )
-
-                    else:
-
-                        c.execute("""
-                        UPDATE targets
-                        SET last_check=?,
-                            fail_count=0
-                        WHERE id=?
-                        """, (
-                            ts,
-                            tid
-                        ))
-
-                else:
-
-                    new_fail = (
-                        t["fail_count"] + 1
+                    # Amber: Warning/Average (or acknowledged High/Disaster).
+                    # Visible but NOT alarm-worthy — no incident, no Telegram.
+                    c.execute(
+                        "UPDATE targets SET status='Degraded', fail_count=0, "
+                        "detail=?, last_check=? WHERE id=?",
+                        (detail, ts, tid)
                     )
 
-                    if (
-                        new_fail >= FAIL_THRESHOLD
-                        and t["status"] == "Online"
-                    ):
+                elif state == "ok":
 
-                        c.execute("""
-                        UPDATE targets
-                        SET status='Offline',
-                            last_down=?,
-                            fail_count=?,
-                            last_check=?
-                        WHERE id=?
-                        """, (
-                            ts,
-                            new_fail,
-                            ts,
-                            tid
-                        ))
+                    if t["status"] in ("Offline", "Degraded"):
+
+                        was_offline = t["status"] == "Offline"
+                        down_dt = (
+                            datetime.strptime(t["last_down"], "%Y-%m-%d %H:%M:%S")
+                            if t["last_down"] else now
+                        )
+                        dur_str = str(now - down_dt).split(".")[0]
+
+                        c.execute(
+                            "UPDATE targets SET status='Online', fail_count=0, "
+                            "last_down=NULL, detail=?, last_check=? WHERE id=?",
+                            (detail, ts, tid)
+                        )
 
                         if c.rowcount > 0:
-
-                            c.execute("""
-                            INSERT INTO incidents(
-                                target,
-                                monitor_detail,
-                                down_time
-                            )
-                            VALUES(?,?,?)
-                            """, (
-                                t["name"],
-                                m_info,
-                                ts
-                            ))
-
                             conn.commit()
-
-                            send_telegram(
-                                t['name'],
-                                t['description'],
-                                m_info,
-                                ts
-                            )
+                            if (now - down_dt).total_seconds() >= MIN_OUTAGE_DURATION:
+                                c.execute(
+                                    "UPDATE incidents SET up_time=?, duration=? "
+                                    "WHERE target=? AND up_time IS NULL",
+                                    (ts, dur_str, t["name"])
+                                )
+                                conn.commit()
+                            # Recovery alert only if it was truly Offline (alarm state)
+                            if was_offline:
+                                send_telegram(t['name'], t['description'], m_info, ts, dur_str)
 
                     else:
 
-                        c.execute("""
-                        UPDATE targets
-                        SET fail_count=?,
-                            last_check=?
-                        WHERE id=?
-                        """, (
-                            new_fail,
-                            ts,
-                            tid
-                        ))
+                        c.execute(
+                            "UPDATE targets SET last_check=?, fail_count=0, "
+                            "detail=? WHERE id=?",
+                            (ts, detail, tid)
+                        )
+
+                else:  # state == "offline" (critical / hard down)
+
+                    new_fail = t["fail_count"] + 1
+
+                    if new_fail >= FAIL_THRESHOLD and t["status"] in ("Online", "Degraded"):
+
+                        c.execute(
+                            "UPDATE targets SET status='Offline', last_down=?, "
+                            "fail_count=?, detail=?, last_check=? WHERE id=?",
+                            (ts, new_fail, detail, ts, tid)
+                        )
+
+                        if c.rowcount > 0:
+                            c.execute(
+                                "INSERT INTO incidents(target, monitor_detail, down_time) "
+                                "VALUES(?,?,?)",
+                                (t["name"], m_info, ts)
+                            )
+                            conn.commit()
+                            send_telegram(t['name'], t['description'], m_info, ts)
+
+                    else:
+
+                        c.execute(
+                            "UPDATE targets SET fail_count=?, detail=?, "
+                            "last_check=? WHERE id=?",
+                            (new_fail, detail, ts, tid)
+                        )
 
                 conn.commit()
                 conn.close()

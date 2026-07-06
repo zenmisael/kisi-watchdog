@@ -57,6 +57,7 @@
         }
 
         .device-card.offline { border-left: 10px solid #ff0000; animation: pulse 0.8s infinite; }
+        .device-card.degraded { border-left: 8px solid #f59e0b; }
         .device-card.maintenance { border-left: 6px solid #fbbf24; }
         
         @keyframes pulse { 0% { transform: scale(1); background: #0a0e17; } 50% { transform: scale(1.01); background: #3a0808; } 100% { transform: scale(1); background: #12141c; } }
@@ -79,12 +80,14 @@
         .group-wrap { display: block; }
         .group-section { background:#05070e; border:1px solid rgba(255,255,255,0.05); border-left:6px solid #1e293b; border-radius:12px; padding:12px 14px; margin-bottom:12px; }
         .group-section.offline { border-left-color:#ff0000; }
+        .group-section.degraded { border-left-color:#f59e0b; }
         .group-section.maintenance { border-left-color:#fbbf24; }
         .group-head { display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
         .group-head .gname { font-weight:800; font-size:15px; }
         .host-chips { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:8px; }
         .host-chip { background:#0a0e17; border-radius:8px; border-left:4px solid #1e293b; padding:8px 10px; display:flex; justify-content:space-between; align-items:flex-start; gap:8px; min-width:0; }
         .host-chip.offline { border-left-color:#ff0000; background:#160b0b; }
+        .host-chip.degraded { border-left-color:#f59e0b; background:#191305; }
         .host-chip.maintenance { border-left-color:#fbbf24; }
         .host-chip .hc-main { min-width:0; flex:1; }
         .host-chip .hc-name { font-weight:700; }
@@ -125,6 +128,7 @@
         <div class="col"><div class="summary-box p-2 text-center" style="background:#0a0e17;"><div class="summary-label">TOTAL</div><h2 id="totalCount" class="stat-val m-0">0</h2></div></div>
         <div class="col"><div class="summary-box p-2 text-center" style="background:#04170f;"><div class="summary-label">GOOD/ONLINE</div><h2 id="onlineCount" class="stat-val m-0" style="color: #4ade80 !important;">0</h2></div></div>
         <div class="col"><div class="summary-box p-2 text-center" style="background:#210606;"><div class="summary-label">CRITICAL/OFFLINE</div><h2 id="offlineCount" class="stat-val m-0" style="color: #f87171 !important;">0</h2></div></div>
+        <div class="col"><div class="summary-box p-2 text-center" style="background:#231803;"><div class="summary-label">WARNING</div><h2 id="degradedCount" class="stat-val m-0" style="color: #f59e0b !important;">0</h2></div></div>
         <div class="col"><div class="summary-box p-2 text-center" style="background:#231103;"><div class="summary-label">MAINTENANCE</div><h2 id="maintCount" class="stat-val m-0" style="color: #fbbf24 !important;">0</h2></div></div>
     </div>
 
@@ -186,6 +190,29 @@
 
     socket.on('status_update', () => refresh());
 
+    // Shared status classification — used by both single and grouped views.
+    // Only "Offline" (critical/hard-down) feeds offItems -> the alarm.
+    // "Degraded" (Zabbix Warning/Average or acknowledged) is amber & silent.
+    function classify(d, offItems, counts) {
+        counts.t++;
+        let cls, stText;
+        if(d.maintenance) {
+            counts.m++; cls = "maintenance"; stText = "Maintenance";
+        } else if(d.status === "Offline") {
+            counts.f++; cls = "offline";
+            stText = (d.monitor_type || "").toLowerCase() === 'zabbix' ? "CRITICAL" : "OFFLINE";
+            offItems.push(d.description ? `${d.name} (${d.description})` : `${d.name}`);
+        } else if(d.status === "Degraded") {
+            counts.d++; cls = "degraded"; stText = "WARNING";
+        } else {
+            counts.o++; cls = "online"; stText = "Online";
+        }
+        const color = cls == 'offline' ? '#ff4444'
+                    : cls == 'degraded' ? '#f59e0b'
+                    : cls == 'maintenance' ? '#fbbf24' : '#4ade80';
+        return { cls, stText, color };
+    }
+
     // Shared alarm/banner — runs for BOTH single and grouped views.
     function updateAlarm(offItems) {
         if(offItems.length > 0) {
@@ -244,7 +271,7 @@
     function refresh() {
         fetch("/status").then(r => r.json()).then(data => {
             let html = "", offItems = [];
-            let counts = { t:0, o:0, f:0, m:0 };
+            let counts = { t:0, o:0, f:0, m:0, d:0 };
 
 
 /* --- GROUP MODE --- */
@@ -254,44 +281,8 @@ if(!groupMode) {
 
     data.forEach(d => {
 
-        counts.t++;
-
-        let cls = "online";
-        let stText = d.status;
-
-        let mType = (d.monitor_type || "").toLowerCase();
-
-        if(d.maintenance) {
-
-            counts.m++;
-
-            cls = "maintenance";
-
-            stText = "Maintenance";
-
-        } else if(d.status !== "Online") {
-
-            counts.f++;
-
-            cls = "offline";
-
-            stText = (
-                mType === 'zabbix'
-                && (d.zabbix_item_key || "").match(/usage|util|pused|cpu|load/i)
-            )
-            ? "HIGH USAGE"
-            : "OFFLINE";
-
-            offItems.push(
-                d.description
-                ? `${d.name} (${d.description})`
-                : `${d.name}`
-            );
-
-        } else {
-
-            counts.o++;
-        }
+        const { cls, stText, color } = classify(d, offItems, counts);
+        const mType = (d.monitor_type || "").toLowerCase();
 
         let mTypeLabel = 'ICMP',
             badgeClass = 'badge-icmp';
@@ -334,17 +325,7 @@ if(!groupMode) {
 
                         </div>
 
-                        <div class="fw-bold"
-                            style="color:${
-                                cls=='offline'
-                                ? '#ff4444'
-                                : (
-                                    cls=='maintenance'
-                                    ? '#fbbf24'
-                                    : '#4ade80'
-                                )
-                            }">
-
+                        <div class="fw-bold" style="color:${color}">
                             ${stText}
                         </div>
 
@@ -357,6 +338,8 @@ if(!groupMode) {
                         </span>
 
                     </div>
+
+                    ${d.detail ? `<div class="small text-truncate" style="opacity:.8; margin-top:4px; color:${cls=='online'?'#94a3b8':color}">${d.detail}</div>` : ''}
 
                 </div>
 
@@ -396,6 +379,7 @@ if(!groupMode) {
     onlineCount.innerText = counts.o;
     offlineCount.innerText = counts.f;
     maintCount.innerText = counts.m;
+    degradedCount.innerText = counts.d;
 
     updateAlarm(offItems);
     scheduleFit();
@@ -448,13 +432,18 @@ data.forEach(d => {
     groups[groupKey].push(d);
 });
 
-// rank: offline first, then maintenance, then online (for sorting)
-const hostRank = h => h.maintenance ? 2 : (h.status !== "Online" ? 0 : 1);
+// rank within a group: critical, then warning, then online, maintenance last
+const hostRank = h => h.maintenance ? 3 : (h.status === "Offline" ? 0 : (h.status === "Degraded" ? 1 : 2));
 
-// order groups so those with outages float to the top
+// order groups: critical groups first, then degraded, then the rest
+const groupSev = g => {
+    const hs = groups[g].filter(h => !h.maintenance);
+    if(hs.some(h => h.status === "Offline")) return 2;
+    if(hs.some(h => h.status === "Degraded")) return 1;
+    return 0;
+};
 const groupNames = Object.keys(groups).sort((a, b) => {
-    const off = g => groups[g].filter(h => !h.maintenance && h.status !== "Online").length;
-    const diff = (off(b) > 0) - (off(a) > 0);
+    const diff = groupSev(b) - groupSev(a);
     return diff !== 0 ? diff : a.localeCompare(b);
 });
 
@@ -463,31 +452,15 @@ groupNames.forEach(groupName => {
     const hosts = groups[groupName].slice().sort((a, b) => hostRank(a) - hostRank(b));
 
     let chips = "";
-    let offlineInGroup = 0, maintInGroup = 0, onlineInGroup = 0;
+    let offlineInGroup = 0, degradedInGroup = 0, maintInGroup = 0, onlineInGroup = 0;
 
     hosts.forEach(d => {
 
-        counts.t++;
-        let cls = "online";
-        let stText = d.status;
-
-        if(d.maintenance) {
-            counts.m++; maintInGroup++;
-            cls = "maintenance";
-            stText = "Maintenance";
-        } else if(d.status !== "Online") {
-            counts.f++; offlineInGroup++;
-            cls = "offline";
-            stText = (
-                (d.monitor_type || "").toLowerCase() === 'zabbix'
-                && (d.zabbix_item_key || "").match(/usage|util|pused|cpu|load/i)
-            ) ? "HIGH USAGE" : "OFFLINE";
-            offItems.push(d.description ? `${d.name} (${d.description})` : `${d.name}`);
-        } else {
-            counts.o++; onlineInGroup++;
-        }
-
-        const stColor = cls == 'offline' ? '#ff4444' : (cls == 'maintenance' ? '#fbbf24' : '#4ade80');
+        const { cls, stText, color: stColor } = classify(d, offItems, counts);
+        if(cls === 'offline') offlineInGroup++;
+        else if(cls === 'degraded') degradedInGroup++;
+        else if(cls === 'maintenance') maintInGroup++;
+        else onlineInGroup++;
 
         const actions = (isAdmin && !tvMode) ? `
             <div class="hc-actions">
@@ -502,18 +475,21 @@ groupNames.forEach(groupName => {
                     <div class="hc-name text-truncate">${d.name}</div>
                     <div class="small opacity-75 ${tvMode ? '' : 'text-truncate'}">${d.description || ''}</div>
                     <div class="fw-bold" style="color:${stColor}; font-size:12px;">${stText}</div>
+                    ${d.detail ? `<div class="small text-truncate" style="font-size:11px; opacity:.8; color:${cls=='online'?'#94a3b8':stColor}">${d.detail}</div>` : ''}
                 </div>
                 ${actions}
             </div>`;
     });
 
-    let sectionClass = offlineInGroup > 0 ? "offline" : (maintInGroup > 0 ? "maintenance" : "");
+    let sectionClass = offlineInGroup > 0 ? "offline"
+                     : (degradedInGroup > 0 ? "degraded"
+                     : (maintInGroup > 0 ? "maintenance" : ""));
 
     html += `
         <div class="group-section ${sectionClass} ${hosts.length > 8 ? 'wide' : ''}">
             <div class="group-head">
                 <span class="gname">${groupName} <span class="badge bg-secondary">${hosts.length} Hosts</span></span>
-                <span class="small opacity-75">✅ ${onlineInGroup} &nbsp;|&nbsp; ❌ ${offlineInGroup} &nbsp;|&nbsp; 🟡 ${maintInGroup}</span>
+                <span class="small opacity-75">✅ ${onlineInGroup} &nbsp;|&nbsp; ❌ ${offlineInGroup} &nbsp;|&nbsp; 🟠 ${degradedInGroup} &nbsp;|&nbsp; 🟡 ${maintInGroup}</span>
             </div>
             <div class="host-chips">${chips}</div>
         </div>`;
@@ -524,7 +500,7 @@ deviceGrid.innerHTML = html;
  
 
 
-           totalCount.innerText = counts.t; onlineCount.innerText = counts.o; offlineCount.innerText = counts.f; maintCount.innerText = counts.m;
+           totalCount.innerText = counts.t; onlineCount.innerText = counts.o; offlineCount.innerText = counts.f; maintCount.innerText = counts.m; degradedCount.innerText = counts.d;
             
             updateAlarm(offItems);
             scheduleFit();
